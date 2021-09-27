@@ -1,0 +1,193 @@
+#!/sbin/sh
+
+######
+# INIT
+######
+
+umask 022
+
+# Global vars
+TMPDIR=/dev/tmp
+PERSISTDIR=/sbin/.magisk/mirror/persist
+
+rm -rf $TMPDIR 2>/dev/null
+mkdir -p $TMPDIR
+
+# echo before loading util_functions
+ui_print() { echo "$1"; }
+
+require_new_magisk() {
+  ui_print "*******************************"
+  ui_print " Please install Magisk v19.0+! "
+  ui_print "*******************************"
+  exit 1
+}
+
+is_setup_script() {
+  unzip -l "$ZIPFILE" setup.sh | grep -q setup.sh
+  return $?
+}
+
+####################
+# SETUP ENVIRONMENT
+####################
+
+OUTFD=$2
+ZIPFILE=$3
+
+mount /data 2>/dev/null
+
+# Load utility functions
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+  . /data/adb/magisk/util_functions.sh
+  NVBASE=/data/adb
+else
+  require_new_magisk
+fi
+
+# Preperation for flashable zips
+setup_flashable
+
+# Mount partitions
+mount_partitions
+
+# Detect version and architecture
+api_level_arch_detect
+
+# Setup busybox and binaries
+if $BOOTMODE; then
+boot_actions
+else
+recovery_actions
+fi
+
+##############
+# PREPARATION
+##############
+
+# Extract prop file
+unzip -o "$ZIPFILE" module.prop -d $TMPDIR >&2
+[ ! -f $TMPDIR/module.prop ] && abort "[!] Unable to extract zip file!"
+
+$BOOTMODE && MODDIRNAME=modules_update || MODDIRNAME=modules
+MODULEROOT=$NVBASE/$MODDIRNAME
+MODID=$(grep_prop id $TMPDIR/module.prop)
+MODPATH=$MODULEROOT/$MODID
+MODNAME=$(grep_prop name $TMPDIR/module.prop)
+
+# Create mod paths
+rm -rf $MODPATH 2>/dev/null
+mkdir -p $MODPATH
+
+##############
+# INSTALLATION
+##############
+
+# Extract modname_print to $MODPATH
+unzip -o "$ZIPFILE" banner service.sh -d $MODPATH >&2
+
+if is_setup_script; then
+unzip -oj "$ZIPFILE" module.prop setup.sh uninstall.sh -d $TMPDIR >&2
+
+# Load install script
+. $TMPDIR/setup.sh
+
+# Remove all old files before doing installation if want to
+  if [ "$CLEANSERVICE" = "true" ]; then
+    rm -rf /data/adb/modules/${MODID}/* 2>/dev/null
+  fi
+
+# Enable debugging if true
+  if [ "$DEBUG" = "true" ]; then
+    set -x
+  else
+    set +x
+  fi
+
+# Callback 01
+mod_info_print
+
+# Unzipping under auto extraction
+if [[ "$AUTOUNZIP" = "true" ]]; then
+   if [ -e "$MODPATH/addon" ] ; then
+   unzip -o "$ZIPFILE" 'addon/*' -d $TMPDIR >&2
+
+   elif [ -e "$MODPATH/system" ]; then
+   unzip -o "$ZIPFILE" 'system/*' -d $MODPATH >&2
+   fi
+fi
+
+# Callback 02
+install_module
+
+# Custom uninstaller
+  if [ -f $TMPDIR/uninstall.sh ]; then 
+    cp -af $TMPDIR/uninstall.sh $MODPATH/uninstall.sh
+  fi
+
+# Skip mount
+  if [ "$SKIPMOUNT" = "true" ]; then
+    touch $MODPATH/skip_mount
+  fi
+
+# Prop file
+  if [ "$PROPFILE" = "false" ]; then
+    rm -rf $MODPATH/system.prop
+  fi
+
+# Post-fs-data script
+  if [ "$POSTFSDATA" = "false" ]; then
+    rm -rf $MODPATH/post-fs-data.sh
+  fi
+
+# Service script
+  if [ "$LATESTARTSERVICE" = "false" ]; then
+    rm -rf $MODPATH/service.sh
+  fi
+
+# Module info
+cp -af $TMPDIR/module.prop $MODPATH/module.prop
+
+# Set permissions
+set_permissions
+
+else
+ui_print "[*] Module setup script not found, exiting installation..."
+exit 1
+fi
+
+# Handle replace folders
+for TARGET in $REPLACE; do
+  ui_print "[*] Replace target: $TARGET"
+  mktouch $MODPATH$TARGET/.replace
+done
+
+if $BOOTMODE; then
+  # Update info for Magisk Manager
+  mktouch $NVBASE/modules/$MODID/update
+  cp -af $MODPATH/module.prop $NVBASE/modules/$MODID/module.prop
+fi
+
+# Copy over custom sepolicy rules
+if [ -f $MODPATH/sepolicy.rule -a -e $PERSISTDIR ]; then
+  ui_print "[*] Installing custom sepolicy patch"
+  PERSISTMOD=$PERSISTDIR/magisk/$MODID
+  mkdir -p $PERSISTMOD
+  cp -af $MODPATH/sepolicy.rule $PERSISTMOD/sepolicy.rule
+fi
+
+# Remove stuffs that don't belong to modules
+rm -rf $MODPATH/LICENSE
+
+##############
+# Finalizing
+##############
+
+cd /
+if ! $BOOTMODE; then
+recovery_cleanup
+fi
+rm -rf $TMPDIR
+
+ui_print "[*] Done"
+exit 0
