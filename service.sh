@@ -1,18 +1,17 @@
 #!/system/bin/sh
-# XCharge 2021
+# XCharge™
+# Author: LOOPER (iamlooper @ github)
 
-export PATH=/sbin:/sbin/su:/su/bin:/su/xbin:/system/bin:/system/xbin
-MODPATH="/data/adb/modules/xcharge"
+wait_until_boot_complete() {
+  while [[ "$(getprop sys.boot_completed)" != "1" ]]; do
+    sleep 3
+  done
+}
 
-# Sleep until boot completed
-until [ "$(getprop sys.boot_completed)" = "1" ] || [ "$(getprop dev.bootcomplete)" = "1" ]
-do
-       sleep 1
-done
+wait_until_boot_complete
 
-# Sleep until some time to complete boot and init
-sleep 60
+# Sleep some time to make sure init is completed
+sleep 30
 
-# Start XCharge (for NOW ONLY double execution)
-$MODPATH/script/xcharge.sh >> /storage/emulated/0/xcharge.txt
-sh ${MODPATH}/script/xcharge.sh >> /storage/emulated/0/xcharge.txt
+# Execute XCharge™
+xcharge --execute
